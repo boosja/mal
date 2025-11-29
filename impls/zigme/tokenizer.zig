@@ -6,6 +6,10 @@ fn nth(s: []const u8, i: usize) ?u8 {
     return if (i < s.len) s[i] else null;
 }
 
+inline fn inc(i: usize) usize {
+    return i + 1;
+}
+
 pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
     var tokens = try ArrayList([]const u8).initCapacity(allocator, 0);
     defer tokens.deinit(allocator);
@@ -17,15 +21,15 @@ pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
     for (s, 0..) |c, i| {
         if (unquoteSplicing) {
             try tokens.append(allocator, "~@");
-            start = i + 1;
+            start = inc(i);
             unquoteSplicing = false;
             continue;
         }
 
         if (withinString) {
             if (c == '"' and s[i - 1] != '\\') {
-                try tokens.append(allocator, s[start..i + 1]);
-                start = i + 1;
+                try tokens.append(allocator, s[start..inc(i)]);
+                start = inc(i);
                 withinString = false;
             }
             continue;
@@ -34,13 +38,13 @@ pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
         if (withinComment) {
             if (c == 10) {
                 try tokens.append(allocator, s[start..i]);
-                start = i + 1;
+                start = inc(i);
                 withinComment = false;
             }
             continue;
         }
 
-        if (c == '~' and nth(s, i + 1) == '@') {
+        if (c == '~' and nth(s, inc(i)) == '@') {
             unquoteSplicing = true;
             continue;
         }
@@ -50,14 +54,14 @@ pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
             ' ', ',', '\t', '\n', 11, 12, '\r' => {
                 if (start != i)
                     try tokens.append(allocator, s[start..i]);
-                start = i + 1;
+                start = inc(i);
             },
             // delimiter
             '(', ')', '[', ']', '{', '}', '\'', '`', '~', '^', '@' => {
                 if (start != i)
                     try tokens.append(allocator, s[start..i]);
-                try tokens.append(allocator, s[i..i + 1]);
-                start = i + 1;
+                try tokens.append(allocator, s[i..inc(i)]);
+                start = inc(i);
             },
             '"' => withinString = true,
             ';' => withinComment = true,
@@ -180,7 +184,39 @@ test "final boss" {
     const tokens = try tokenize(std.testing.allocator, input);
     defer std.testing.allocator.free(tokens);
 
-    const expected = &[_][]const u8{ ";; adds numbers", "(", "defn", "add", "[", "&", "numbers", "]", "(", "apply", "+", "numbers", ")", ")", "(", "defn", "get-token-frequencies", "\"Removes comments and gets frequencies of tokens\"", "[", "tokens", "]", "(", "->>", "tokens", "(", "remove", "comment?", ")", "frequencies", ")", ")" };
+    const expected = &[_][]const u8{
+        ";; adds numbers",
+        "(",
+        "defn",
+        "add",
+        "[",
+        "&",
+        "numbers",
+        "]",
+        "(",
+        "apply",
+        "+",
+        "numbers",
+        ")",
+        ")",
+        "(",
+        "defn",
+        "get-token-frequencies",
+        "\"Removes comments and gets frequencies of tokens\"",
+        "[",
+        "tokens",
+        "]",
+        "(",
+        "->>",
+        "tokens",
+        "(",
+        "remove",
+        "comment?",
+        ")",
+        "frequencies",
+        ")",
+        ")",
+    };
     for (expected, tokens) |exp, actual| {
         try std.testing.expectEqualStrings(exp, actual);
     }
