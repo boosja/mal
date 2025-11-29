@@ -49,64 +49,80 @@ test "checks if delimiter" {
     try std.testing.expect(!isDelimiter('a'));
 }
 
-fn getChar(i: usize, s: []const u8) ?u8 {
+fn nth(s: []const u8, i: usize) ?u8 {
     return if (i < s.len) s[i] else null;
-}
-
-fn appendIfPopulated(allocator: Allocator, tokens: *ArrayList([]const u8), token: *ArrayList(u8)) !void {
-    if (token.items.len > 0) {
-        try tokens.append(allocator, try token.toOwnedSlice(allocator));
-    }
 }
 
 pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
     var tokens = try ArrayList([]const u8).initCapacity(allocator, 0);
+    defer tokens.deinit(allocator);
 
-    var currentToken = try ArrayList(u8).initCapacity(allocator, 0);
-    defer currentToken.deinit(allocator);
+    var start: usize = 0;
+    var unquoteSplicing = false;
+    var withinString = false;
+    var withinComment = false;
+    for (s, 0..) |c, i| {
+        if (unquoteSplicing) {
+            if (c == '@') {
+                try tokens.append(allocator, "~@");
+                start = i + 1;
+            }
+            unquoteSplicing = false;
+            continue;
+        }
 
-    var i: usize = 0;
-    while (getChar(i, s)) |c| : (i += 1) {
+        if (withinString) {
+            if (c == '"' and s[i - 1] != '\\') {
+                try tokens.append(allocator, s[start..i + 1]);
+                start = i + 1;
+                withinString = false;
+            }
+            continue;
+        }
+
+        if (withinComment) {
+            if (c == 10) {
+                try tokens.append(allocator, s[start..i]);
+                start = i + 1;
+                withinComment = false;
+            }
+            continue;
+        }
+
         if (isWhitespace(c)) {
-            try appendIfPopulated(allocator, &tokens, &currentToken);
-        } else if (c == '~' and getChar(i + 1, s) == '@') {
-            var unquoteSplicing = try allocator.alloc(u8, 2);
-            unquoteSplicing[0] = c;
-            unquoteSplicing[1] = '@';
-            try tokens.append(allocator, unquoteSplicing);
-            i += 1;
-        } else if (isDelimiter(c)) {
-            try appendIfPopulated(allocator, &tokens, &currentToken);
+            if (start != i)
+                try tokens.append(allocator, s[start..i]);
+            start = i + 1;
+            continue;
+        }
 
-            var delim = try allocator.alloc(u8, 1);
-            delim[0] = c;
-            try tokens.append(allocator, delim);
-        } else if (c == '"') {
-            try currentToken.append(allocator, c);
-            i += 1;
-            while (getChar(i, s)) |sc| : (i += 1) {
-                try currentToken.append(allocator, sc);
-                if (sc == '"' and getChar(i - 1, s) != '\\') {
-                    try appendIfPopulated(allocator, &tokens, &currentToken);
-                    break;
-                }
-            }
-        } else if (c == ';') {
-            try currentToken.append(allocator, c);
-            i += 1;
-            while (getChar(i, s)) |sc| : (i += 1) {
-                if (sc == 10) {
-                    try appendIfPopulated(allocator, &tokens, &currentToken);
-                    break;
-                }
-                try currentToken.append(allocator, sc);
-            }
-        } else {
-            try currentToken.append(allocator, c);
+        if (c == '~' and nth(s, i + 1) == '@') {
+            unquoteSplicing = true;
+            continue;
+        }
+
+        if (isDelimiter(c)) {
+            if (start != i)
+                try tokens.append(allocator, s[start..i]);
+            try tokens.append(allocator, s[i..i + 1]);
+            start = i + 1;
+            continue;
+        }
+
+        if (c == '"') {
+            withinString = true;
+            continue;
+        }
+
+        if (c == ';') {
+            withinComment = true;
+            continue;
         }
     }
 
-    try appendIfPopulated(allocator, &tokens, &currentToken);
+    if (start != s.len) {
+        try tokens.append(allocator, s[start..s.len]);
+    }
 
     return tokens.toOwnedSlice(allocator);
 }
@@ -114,12 +130,7 @@ pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
 test "tokenizes symbol" {
     const input = "token";
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{"token"};
     try std.testing.expectEqual(expected.len, tokens.len);
@@ -129,12 +140,7 @@ test "tokenizes symbol" {
 test "tokenizes number with multiple digits" {
     const input = "42";
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{"42"};
     try std.testing.expectEqualStrings(expected[0], tokens[0]);
@@ -143,12 +149,7 @@ test "tokenizes number with multiple digits" {
 test "tokenizes multiple numbers" {
     const input = "42 23 51";
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{ "42", "23", "51" };
     try std.testing.expectEqualStrings(expected[0], tokens[0]);
@@ -157,12 +158,7 @@ test "tokenizes multiple numbers" {
 test "tokenizes vector" {
     const input = "[1 2 3]";
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{ "[", "1", "2", "3", "]" };
     for (expected, tokens) |exp, actual| {
@@ -173,12 +169,7 @@ test "tokenizes vector" {
 test "tokenizes unquote-splicing delimiter" {
     const input = "~@(abc)";
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{ "~@", "(", "abc", ")" };
     for (expected, tokens) |exp, actual| {
@@ -189,12 +180,7 @@ test "tokenizes unquote-splicing delimiter" {
 test "tokenizes string" {
     const input = "\"hello\n\\\"world\\\"'~@\"";
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{"\"hello\n\\\"world\\\"'~@\""};
     for (expected, tokens) |exp, actual| {
@@ -209,12 +195,7 @@ test "tokenizes multiline string" {
         \\It sees back!"
     ;
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{"\"hello,\nworld!\nIt sees back!\""};
     for (expected, tokens) |exp, actual| {
@@ -229,12 +210,7 @@ test "tokenizes comments" {
         \\;; comment
     ;
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{ "; func", "(", "+", "1", "2", ")", ";; comment" };
     for (expected, tokens) |exp, actual| {
@@ -257,12 +233,7 @@ test "final boss" {
         \\
     ;
     const tokens = try tokenize(std.testing.allocator, input);
-    defer {
-        for (tokens) |token| {
-            std.testing.allocator.free(token);
-        }
-        std.testing.allocator.free(tokens);
-    }
+    defer std.testing.allocator.free(tokens);
 
     const expected = &[_][]const u8{ ";; adds numbers", "(", "defn", "add", "[", "&", "numbers", "]", "(", "apply", "+", "numbers", ")", ")", "(", "defn", "get-token-frequencies", "\"Removes comments and gets frequencies of tokens\"", "[", "tokens", "]", "(", "->>", "tokens", "(", "remove", "comment?", ")", "frequencies", ")", ")" };
     for (expected, tokens) |exp, actual| {
