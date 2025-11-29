@@ -2,53 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
-fn isWhitespace(c: u8) bool {
-    return switch (c) {
-        ' ',
-        ',',
-        9, // horizontal tab \t
-        10, // line feed \n
-        11, // vertical tab \v
-        12, // form feed \f
-        13, // carriage return \r
-        => true,
-        else => false,
-    };
-}
-
-test "checks if whitespace" {
-    try std.testing.expect(isWhitespace(' '));
-    try std.testing.expect(isWhitespace(','));
-    try std.testing.expect(isWhitespace(9));
-    try std.testing.expect(isWhitespace(10));
-    try std.testing.expect(isWhitespace(11));
-    try std.testing.expect(isWhitespace(12));
-    try std.testing.expect(isWhitespace(13));
-    try std.testing.expect(!isWhitespace('a'));
-}
-
-fn isDelimiter(c: u8) bool {
-    return switch (c) {
-        '(', ')', '[', ']', '{', '}', '\'', '`', '~', '^', '@' => true,
-        else => false,
-    };
-}
-
-test "checks if delimiter" {
-    try std.testing.expect(isDelimiter('('));
-    try std.testing.expect(isDelimiter(')'));
-    try std.testing.expect(isDelimiter('['));
-    try std.testing.expect(isDelimiter(']'));
-    try std.testing.expect(isDelimiter('{'));
-    try std.testing.expect(isDelimiter('}'));
-    try std.testing.expect(isDelimiter('\''));
-    try std.testing.expect(isDelimiter('`'));
-    try std.testing.expect(isDelimiter('~'));
-    try std.testing.expect(isDelimiter('^'));
-    try std.testing.expect(isDelimiter('@'));
-    try std.testing.expect(!isDelimiter('a'));
-}
-
 fn nth(s: []const u8, i: usize) ?u8 {
     return if (i < s.len) s[i] else null;
 }
@@ -63,10 +16,8 @@ pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
     var withinComment = false;
     for (s, 0..) |c, i| {
         if (unquoteSplicing) {
-            if (c == '@') {
-                try tokens.append(allocator, "~@");
-                start = i + 1;
-            }
+            try tokens.append(allocator, "~@");
+            start = i + 1;
             unquoteSplicing = false;
             continue;
         }
@@ -89,34 +40,28 @@ pub fn tokenize(allocator: Allocator, s: []const u8) ![][]const u8 {
             continue;
         }
 
-        if (isWhitespace(c)) {
-            if (start != i)
-                try tokens.append(allocator, s[start..i]);
-            start = i + 1;
-            continue;
-        }
-
         if (c == '~' and nth(s, i + 1) == '@') {
             unquoteSplicing = true;
             continue;
         }
 
-        if (isDelimiter(c)) {
-            if (start != i)
-                try tokens.append(allocator, s[start..i]);
-            try tokens.append(allocator, s[i..i + 1]);
-            start = i + 1;
-            continue;
-        }
-
-        if (c == '"') {
-            withinString = true;
-            continue;
-        }
-
-        if (c == ';') {
-            withinComment = true;
-            continue;
+        switch (c) {
+            // whitespace
+            ' ', ',', '\t', '\n', 11, 12, '\r' => {
+                if (start != i)
+                    try tokens.append(allocator, s[start..i]);
+                start = i + 1;
+            },
+            // delimiter
+            '(', ')', '[', ']', '{', '}', '\'', '`', '~', '^', '@' => {
+                if (start != i)
+                    try tokens.append(allocator, s[start..i]);
+                try tokens.append(allocator, s[i..i + 1]);
+                start = i + 1;
+            },
+            '"' => withinString = true,
+            ';' => withinComment = true,
+            else => {},
         }
     }
 
